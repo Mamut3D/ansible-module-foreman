@@ -57,6 +57,14 @@ options:
     description: Define if template is a snippet or not
     required: false
     default: false
+  organizations:
+    description:
+    - List of organization the medium should be assigned to
+    required: false
+  locations:
+    description:
+    - List of locations the medium should be assigned to
+    required: false
   state:
     description: Provision template state
     required: false
@@ -92,9 +100,15 @@ EXAMPLES = '''
     name: CoreOS Cloud-config
     locked: false
     operatingsystems:
-    - CoreOS
+      - CoreOS
     template_file: /tmp/coreos-cloud-config
+    template_kind_name: provision
     snippet: true
+    organizations:
+      - Development
+      - DevOps
+    locations:
+      - Prague
     state: present
     foreman_host: 127.0.0.1
     foreman_port: 443
@@ -108,6 +122,16 @@ try:
     foremanclient_found = True
 except ImportError:
     foremanclient_found = False
+
+try:
+    from ansible.module_utils.foreman_utils import (
+        get_organization_ids,
+        get_location_ids,
+    )
+    has_import_error = False
+except ImportError as e:
+    has_import_error = True
+    import_error_msg = str(e)
 
 
 def dict_list_to_list(alist, key):
@@ -151,7 +175,7 @@ def get_resources(resource_type, resource_func, resource_specs, search_field='na
 
 def ensure():
     audit_comment = module.params['audit_comment']
-    compareable_keys = ['locked', 'snippet', 'template']
+    compareable_keys = ['locked', 'snippet', 'template', 'organizations', 'locations' ]
     locked = module.params['locked']
     name = module.params['name']
     operatingsystems = module.params['operatingsystems']
@@ -160,6 +184,8 @@ def ensure():
     template = module.params['template']
     template_file = module.params['template_file']
     template_kind_name = module.params['template_kind_name']
+    organizations = module.params['organizations']
+    locations = module.params['locations']
 
     foreman_host = module.params['foreman_host']
     foreman_port = module.params['foreman_port']
@@ -207,6 +233,10 @@ def ensure():
         data['audit_comment'] = audit_comment
         data['locked'] = locked
         data['snippet'] = snippet
+        if organizations:
+             data['organization_ids'] = get_organization_ids(module, theforeman, organizations)
+        if locations:
+             data['location_ids'] = get_location_ids(module, theforeman, locations)
 
         if template_kind_name:
             res = get_resources(resource_type='template_kinds',
@@ -253,6 +283,8 @@ def main():
             template_file=dict(type='str', required=False),
             template_kind_name=dict(type='str', required=False),
             snippet=dict(type='bool', default=False),
+            organizations=dict(type='list', required=False),
+            locations=dict(type='list', required=False),
             state=dict(type='str', default='present', choices=['present', 'absent']),
             foreman_host=dict(type='str', default='127.0.0.1'),
             foreman_port=dict(type='str', default='443'),
@@ -264,6 +296,9 @@ def main():
 
     if not foremanclient_found:
         module.fail_json(msg='python-foreman module is required. See https://github.com/Nosmoht/python-foreman.')
+    if has_import_error:
+        module.fail_json(msg=import_error_msg)
+
 
     changed, config_template = ensure()
     module.exit_json(changed=changed, config_template=config_template)
