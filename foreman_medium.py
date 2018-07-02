@@ -44,7 +44,7 @@ options:
   locations:
     description:
     - List of locations the medium should be assigned to
-    required: false  
+    required: false
   organizations:
     description:
     - List of organization the medium should be assigned to
@@ -82,7 +82,7 @@ EXAMPLES = '''
   foreman_medium:
     name: CentOS mirror
     path: http://mirror.centos.org/centos/$version/os/$arch
-    os_family: RedHat
+    os_family: Redhat
     locations:
     - Munich
     organizations:
@@ -93,6 +93,12 @@ EXAMPLES = '''
     foreman_pass: secret
     foreman_host: foreman.example.com
     foreman_port: 443
+
+- name: delete all Media
+  foreman_medium:
+    name: *
+    state: absent
+    ...
 '''
 
 try:
@@ -102,31 +108,23 @@ try:
 except ImportError:
     foremanclient_found = False
 
+try:
+    from ansible.module_utils.foreman_utils import *
 
-def get_organization_ids(module, theforeman, organizations):
-    result = []
-    for i in range(0, len(organizations)):
-        try:
-            organization = theforeman.search_organization(data={'name': organizations[i]})
-            if not organization:
-                module.fail_json('Could not find Organization {0}'.format(organizations[i]))
-            result.append(organization.get('id'))
-        except ForemanError as e:
-            module.fail_json('Could not get Organizations: {0}'.format(e.message))
-    return result
+    has_import_error = False
+except ImportError as e:
+    has_import_error = True
+    import_error_msg = str(e)
 
 
-def get_location_ids(module, theforeman, locations):
-    result = []
-    for i in range(0, len(locations)):
-        try:
-            location = theforeman.search_location(data={'name':locations[i]})
-            if not location:
-                module.fail_json('Could not find Location {0}'.format(locations[i]))
-            result.append(location.get('id'))
-        except ForemanError as e:
-            module.fail_json('Could not get Locations: {0}'.format(e.message))
-    return result
+def medium_equal(data, medium, module):
+    if medium['path'] != data['path'] or medium['os_family'] != data['os_family']:
+        return False
+    if not organizations_equal(data, medium):
+        return False
+    if not locations_equal(data, medium):
+        return False
+    return True
 
 
 def ensure(module):
@@ -134,7 +132,6 @@ def ensure(module):
     path = module.params['path']
     state = module.params['state']
     os_family = module.params['os_family']
-
     organizations = module.params['organizations']
     locations = module.params['locations']
 
@@ -152,31 +149,28 @@ def ensure(module):
 
     data = {'name': name}
 
-
     if name == '*' and state == 'absent':
         try:
             all_media_list = theforeman.get_resources(resource_type=MEDIA)
             for element in all_media_list:
-                theforeman.delete_medium(id=element.get('id'))
+                theforeman.delete_medium(id=element['id'])
             return True, all_media_list
         except ForemanError as e:
             module.fail_json(msg='Error in deleting all existing media: {0}'.format(e.message))
 
     try:
         medium = theforeman.search_medium(data=data)
+        if medium:
+            medium = theforeman.get_medium(id=medium['id'])
     except ForemanError as e:
         module.fail_json(msg='Could not get medium: {0}'.format(e.message))
 
     data['path'] = path
     data['os_family'] = os_family
-
-    if organizations:
-         data['organization_ids'] = get_organization_ids(module, theforeman, organizations)
-
-    if locations:
-         data['location_ids'] = get_location_ids(module, theforeman, locations)
-
-
+    if organizations is not None:
+        data['organization_ids'] = get_organization_ids(module, theforeman, organizations)
+    if locations is not None:
+        data['location_ids'] = get_location_ids(module, theforeman, locations)
 
     if not medium and state == 'present':
         try:
@@ -188,19 +182,18 @@ def ensure(module):
     if medium:
         if state == 'absent':
             try:
-                medium = theforeman.delete_medium(id=medium.get('id'))
+                medium = theforeman.delete_medium(id=medium['id'])
                 return True, medium
             except ForemanError as e:
                 module.fail_json('Could not delete medium: {0}'.format(e.message))
-        if medium.get('path') != path or medium.get('os_family') != os_family:
+        if not medium_equal(data, medium, module):
             try:
-                medium = theforeman.update_medium(id=medium.get('id'), data=data)
+                medium = theforeman.update_medium(id=medium['id'], data=data)
                 return True, medium
             except ForemanError as e:
                 module.fail_json(msg='Could not update medium: {0}'.format(e.message))
 
     return False, medium
-
 
 
 def main():
@@ -222,6 +215,8 @@ def main():
 
     if not foremanclient_found:
         module.fail_json(msg='python-foreman module is required. See https://github.com/Nosmoht/python-foreman.')
+    if has_import_error:
+        module.fail_json(msg=import_error_msg)
 
     changed, medium = ensure(module)
     module.exit_json(changed=changed, medium=medium)
